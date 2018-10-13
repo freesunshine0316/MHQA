@@ -42,6 +42,10 @@ if __name__ == '__main__':
     FLAGS = namespace_utils.load_namespace(model_prefix + ".config.json")
     FLAGS = MHQA_trainer.enrich_options(FLAGS)
 
+    if FLAGS.max_passage_size < 3000:
+        FLAGS.max_passage_size = 3000
+    print('Maximal passage size {}'.format(FLAGS.max_passage_size))
+
     # load vocabs
     print('Loading vocabs.')
     word_vocab = Vocab(word_vec_path, fileformat='txt2')

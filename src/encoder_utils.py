@@ -101,12 +101,15 @@ class SeqEncoder(object):
         if options.with_cudnn:
             with tf.variable_scope('biCudnnLSTM'):
                 sequence_repres = tf.transpose(sequence_repres, [1,0,2]) # [seq_len, batch, dim]
-                cudnn_lstm = tf.contrib.cudnn_rnn.CudnnLSTM(options.seq_lstm_layer_num, options.seq_lstm_dim,
-                        direction="bidirectional", name="cudnn_bi_lstm", dropout=options.dropout_rate)
-                all_sequence_representation, _ = cudnn_lstm(sequence_repres)
+                cudnn_lstm = tf.contrib.cudnn_rnn.CudnnLSTM(options.seq_lstm_layer_num, options.seq_lstm_dim, #input_dim,
+                        direction="bidirectional", dropout=options.dropout_rate)
+                #input_h = tf.zeros((batch_size, sequence_len, options.seq_lstm_dim))
+                #input_c = tf.zeros((batch_size, sequence_len, options.seq_lstm_dim))
+                all_sequence_representation, _ = cudnn_lstm(sequence_repres) #, input_h, input_c, None)
                 all_sequence_representation = tf.transpose(all_sequence_representation, [1,0,2]) # [batch, seq_len, dim]
                 if is_training:
                     all_sequence_representation = tf.nn.dropout(all_sequence_representation, (1 - options.dropout_rate))
+            print(tf.shape(all_sequence_representation))
             sequence_dim = options.seq_lstm_dim * 2
         else:
             all_sequence_representation = []
@@ -129,19 +132,23 @@ class SeqEncoder(object):
                         if options.direction == 'forward':
                             # [batch_size, sequence_len, seq_lstm_dim]
                             cur_sequence_repres = sequence_context_representation_fw
-                            sequence_dim += options.seq_lstm_dim
+                            if i == options.seq_lstm_layer_num-1:
+                                sequence_dim += options.seq_lstm_dim
                         elif options.direction == 'backward':
                             # [batch_size, sequence_len, seq_lstm_dim]
                             cur_sequence_repres = sequence_context_representation_bw
-                            sequence_dim += options.seq_lstm_dim
+                            if i == options.seq_lstm_layer_num-1:
+                                sequence_dim += options.seq_lstm_dim
                         elif options.direction == 'bidir':
                             # [batch_size, sequence_len, 2*seq_lstm_dim]
                             cur_sequence_repres = tf.concat(
                                     [sequence_context_representation_fw, sequence_context_representation_bw], 2)
-                            sequence_dim += options.seq_lstm_dim * 2
+                            if i == options.seq_lstm_layer_num-1:
+                                sequence_dim += options.seq_lstm_dim * 2
                         else:
                             assert False
-                        all_sequence_representation.append(cur_sequence_repres)
+                        if i == options.seq_lstm_layer_num-1:
+                            all_sequence_representation.append(cur_sequence_repres)
             all_sequence_representation = tf.concat(all_sequence_representation, 2) # [batch_size, sequence_len, sequence_dim]
 
         all_sequence_representation = all_sequence_representation * tf.expand_dims(sequence_mask, axis=-1)
