@@ -13,27 +13,24 @@ import torch.nn.functional as F
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
 
-options_file = \
-        "https://allennlp.s3.amazonaws.com/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_options.json"
-weight_file = \
-        "https://allennlp.s3.amazonaws.com/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_weights.hdf5"
-
 
 class ModelGraph(nn.Module):
     def __init__(self, general_config):
         super(ModelGraph, self).__init__()
-
         self.general_config = general_config
         self.dropout = nn.Dropout(self.general_config.dropout)
 
-        self.elmo_L = 2
-        self.elmo = Elmo(options_file, weight_file, self.elmo_L, dropout=self.general_config.dropout)
-        self.elmo_weights = nn.Linear(self.elmo_L, 1, bias=False)
-
-        emb_size = 1024
-        if self.general_config.embedding_compress_size > 0:
-            self.embedding_projector = nn.Linear(emb_size, self.general_config.embedding_compress_size)
-            emb_size = self.general_config.embedding_compress_size
+        if self.general_config.embedding_model.find("elmo") >= 0:
+            elmo_prefix = self.general_config.__dict__[self.general_config.embedding_model]
+            options_file = elmo_prefix + '_options.json'
+            weights_file = elmo_prefix + '_weights.hdf5'
+            self.elmo_L = self.general_config.elmo_layer
+            self.elmo = Elmo(options_file, weights_file, self.elmo_L, dropout=self.general_config.dropout)
+            if self.elmo_L > 1:
+                self.elmo_layer_interp = nn.Linear(self.elmo_L, 1, bias=False)
+            emb_size = self.elmo.get_output_dim()
+        else:
+            assert False, 'not supporting regular Golve embedding now'
 
         if self.general_config.use_mention_feature:
             self.mention_width_embedding = nn.Embedding(self.general_config.mention_max_width,
@@ -46,11 +43,12 @@ class ModelGraph(nn.Module):
         if self.general_config.use_mention_feature:
             mention_emb_size += 2 * self.general_config.feature_size
 
-        self.mention_scorer = utils.FFNN(self.general_config.ffnn_depth,
-                mention_emb_size, self.general_config.ffnn_size, 1, self.general_config.dropout)
-
         if self.general_config.use_mention_head:
             self.mention_head_scorer = nn.Linear(emb_size, 1)
+
+        if self.general_config.mention_compress_size > 0:
+            self.mention_compressor = nn.Linear(mention_emb_size, self.general_config.mention_compress_size)
+            mention_emb_size = self.general_config.mention_compress_size
 
         if self.general_config.graph_encoding == "GRN":
             print("With GRN as the graph encoder")
@@ -70,9 +68,12 @@ class ModelGraph(nn.Module):
 
     def get_elmo_repre(self, ids):
         elmo_outputs = self.elmo(ids)
-        repre = torch.stack(elmo_outputs['elmo_representations'], dim=3) # [batch, seq, emb, L]
-        repre = self.elmo_weights(repre).squeeze(dim=3) # [batch, seq, emb]
-        return repre * elmo_outputs['mask'].float().unsqueeze(dim=2) # [batch, seq, emb]
+        if self.elmo_L > 1:
+            repre = torch.stack(elmo_outputs['elmo_representations'], dim=3) # [batch, seq, emb, L]
+            repre = self.elmo_layer_interp(repre).squeeze(dim=3) # [batch, seq, emb]
+        else:
+            repre = elmo_outputs['elmo_representations'][0] # [batch, seq, emb]
+        return repre # [batch, seq, emb]
 
 
     def forward(self, batch):
@@ -99,9 +100,9 @@ class ModelGraph(nn.Module):
         mention_emb = self.get_mention_embedding(passage_repre, mention_starts, mention_ends,
                 mention_types, mention_mask.float())
 
-        if self.general_config.embedding_compress_size > 0:
-            question_emb = self.embedding_projector(question_emb)
-            mention_emb = self.embedding_projector(mention_emb)
+        if self.general_config.mention_compress_size > 0:
+            question_emb = self.mention_compressor(question_emb)
+            mention_emb = self.mention_compressor(mention_emb)
 
         matching_results = []
         rst_seq = self.perform_matching(mention_emb, question_emb)
@@ -115,7 +116,7 @@ class ModelGraph(nn.Module):
                 edge_max_num = utils.shape(edges, 2)
                 edge_mask = utils.sequence_mask(edge_nums.view(batch_size * mention_max_num),
                         edge_max_num).view(batch_size, mention_max_num, edge_max_num) # [batch, mention, edge]
-                #assert not (edge_mask & (~mention_mask.unsqueeze(dim=2))).any().item()
+                assert not (edge_mask & (~mention_mask.unsqueeze(dim=2))).any().item()
 
             for i in range(self.general_config.graph_encoding_steps):
                 # TODO: consider merging question emb into mentions to make 'question-aware'
@@ -139,7 +140,7 @@ class ModelGraph(nn.Module):
         candidate_mask = utils.sequence_mask(candidate_num, cand_max_num) # [batch, cand]
         candidate_appear_mask = utils.sequence_mask(candidate_appear_num.view(batch_size * cand_max_num),
                 cand_pos_max_num).view(batch_size, cand_max_num, cand_pos_max_num) # [batch, cand, pos]
-        #assert not (candidate_appear_mask & (~candidate_mask.unsqueeze(dim=2))).any().item()
+        assert not (candidate_appear_mask & (~candidate_mask.unsqueeze(dim=2))).any().item()
 
         candidate_appear_logits = utils.batch_gather(logits, candidates) + \
                 candidate_appear_mask.float().log() # [batch, cand, pos]

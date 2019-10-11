@@ -88,19 +88,17 @@ def main():
         FLAGS.best_accu = best_accu
         print("!!Accuracy for pretrained model is {}".format(best_accu))
 
-    # parameter
-    named_params = list(model.named_parameters())
-    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    grouped_params = [
-            {'params': [p for n, p in named_params if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-            {'params': [p for n, p in named_params if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}]
-
     # optimizer
     train_updates = len(trainset_batches) * FLAGS.num_epochs
     if FLAGS.grad_accum_steps > 1:
         train_updates = train_updates // FLAGS.grad_accum_steps
-    optimizer = BertAdam(grouped_params, lr=FLAGS.learning_rate, warmup=FLAGS.warmup_proportion, t_total=train_updates)
-    #optimizer = BertAdam(grouped_params, lr=FLAGS.learning_rate)
+    if FLAGS.optim == 'bertadam':
+        optimizer = BertAdam(model.parameters(),
+                lr=FLAGS.learning_rate, warmup=FLAGS.warmup_proportion, t_total=train_updates)
+    elif FLAGS.optim == 'adam':
+        optimizer = Adam(model.parameters(), lr=FLAGS.learning_rate)
+    else:
+        assert False, 'unsupported optimizer type: {}'.format(FLAGS.optim)
 
     print('Start the training loop, total *updating* steps = {}'.format(train_updates))
     finished_steps, finished_epochs = 0, 0
