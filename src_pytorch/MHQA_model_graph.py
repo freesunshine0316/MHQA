@@ -32,12 +32,20 @@ class ModelGraph(nn.Module):
         else:
             assert False, 'not supporting regular Golve embedding now'
 
+        self.passage_encoder = nn.LSTM(emb_size, self.general_config.lstm_size, num_layers=1,
+                batch_first=True, bidirectional=True)
+
+        self.question_encoder = nn.LSTM(emb_size,self.general_config.lstm_size, num_layers=1,
+                batch_first=True, bidirectional=True)
+
+        emb_size = 2 * self.general_config.lstm_size
+
         if self.general_config.use_mention_feature:
             self.mention_width_embedding = nn.Embedding(self.general_config.mention_max_width,
                     self.general_config.feature_size)
             self.mention_type_embedding = nn.Embedding(4, self.general_config.feature_size)
 
-        mention_emb_size = emb_size * 2
+        mention_emb_size = 2 * emb_size
         if self.general_config.use_mention_head:
             mention_emb_size += emb_size
         if self.general_config.use_mention_feature:
@@ -73,12 +81,21 @@ class ModelGraph(nn.Module):
             repre = self.elmo_layer_interp(repre).squeeze(dim=3) # [batch, seq, emb]
         else:
             repre = elmo_outputs['elmo_representations'][0] # [batch, seq, emb]
-        return repre # [batch, seq, emb]
+        return repre * elmo_outputs['mask'].float().unsqueeze(dim=2) # [batch, seq, emb]
 
 
     def forward(self, batch):
-        passage_repre = self.get_elmo_repre(batch['passage_ids']) # [batch, passage, emb]
-        question_repre = self.get_elmo_repre(batch['question_ids']) # [batch, question, emb]
+        batch_size, passage_max_len, other = list(batch['passage_ids'].size())
+        assert passage_max_len % 10 == 0
+
+        passage_ids = batch['passage_ids'].view(batch_size * 10, passage_max_len // 10, other) # [batch*10, passage/10, other]
+        passage_repre = self.get_elmo_repre(passage_ids) # [batch*10, passage/10, elmo_emb]
+        passage_repre, _ = self.passage_encoder(passage_repre) # [batch*10, passage/10, lstm_emb]
+        emb_size = utils.shape(passage_repre, 2)
+        passage_repre = passage_repre.contiguous().view(batch_size, passage_max_len, emb_size)
+
+        question_repre = self.get_elmo_repre(batch['question_ids']) # [batch, question, elmo_emb]
+        question_repre, _ = self.question_encoder(question_repre) # [batch, question, lstm_emb]
 
         # modeling question
         batch_size = len(batch['ids'])

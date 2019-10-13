@@ -5,6 +5,7 @@ import sys
 import numpy as np
 import random
 import torch
+import utils
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
 
@@ -246,6 +247,12 @@ def make_batches_elmo(features, config, is_sort=True, is_shuffle=False):
 
         # textual input
         passage_ids = batch_to_ids([features[N+i]['passage'] for i in range(0, B)]) # [batch, passage]
+        passage_lens = torch.tensor([len(features[N+i]['passage']) for i in range(0, B)], dtype=torch.long) # [batch]
+        _, passage_max_len, other = list(passage_ids.size())
+        extra_len = 10 - (passage_max_len % 10)
+        if extra_len < 10:
+            extra_ids = torch.zeros(B, extra_len, other, dtype=torch.long)
+            passage_ids = torch.cat([passage_ids, extra_ids], dim=1)
         question_ids = batch_to_ids([features[N+i]['question'] for i in range(0, B)]) # [batch, question]
         question_lens = torch.tensor([len(features[N+i]['question']) for i in range(0, B)], dtype=torch.long) # [batch]
         assert (question_lens > 0).all()
@@ -334,8 +341,9 @@ def make_batches_elmo(features, config, is_sort=True, is_shuffle=False):
 
         ids = [features[N+i]['id'] for i in range(0, B)]
 
-        batches.append({'passage_ids':passage_ids, 'question_ids':question_ids, 'question_lens': question_lens, 'ids':ids,
-            'mention_nums':mention_nums, 'mention_starts':mention_starts, 'mention_ends':mention_ends, 'refs':refs,
+        batches.append({'passage_ids':passage_ids, 'passage_lens':passage_lens, 'question_ids':question_ids,
+            'question_lens': question_lens, 'ids':ids, 'refs':refs,
+            'mention_nums':mention_nums, 'mention_starts':mention_starts, 'mention_ends':mention_ends,
             'mention_types':mention_types, 'edge_nums':edge_nums, 'edges':edges, 'candidate_num':candidate_num,
             'candidate_appear_num':candidate_appear_num, 'candidates':candidates, 'candidate_str':candidate_str})
         N += B
