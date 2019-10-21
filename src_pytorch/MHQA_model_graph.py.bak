@@ -162,39 +162,13 @@ class ModelGraph(nn.Module):
                 cand_pos_max_num).view(batch_size, cand_max_num, cand_pos_max_num) # [batch, cand, pos]
         assert not (candidate_appear_mask & (~candidate_mask.unsqueeze(dim=2))).any().item()
 
-        ## idea 1
-        #candidate_appear_logits = (utils.batch_gather(logits, candidates) + \
-        #        candidate_appear_mask.float().log()).view(batch_size, cand_max_num * cand_pos_max_num) # [batch, cand * pos]
-        #candidate_appear_logits = torch.clamp(candidate_appear_logits, -1e1, 1e1) # [batch, cand * pos]
-        #candidate_appear_dist = F.softmax(candidate_appear_logits, dim=1).view(batch_size,
-        #        cand_max_num, cand_pos_max_num) # [batch, cand, pos]
-
-        ## idea 2
-        #candidate_appear_dist = torch.clamp(utils.batch_gather(logits, candidates).exp() * \
-        #        candidate_appear_mask.float(), 1e-6, 1e6).view(batch_size, cand_max_num * cand_pos_max_num) # [batch, cand * pos]
-        #candidate_appear_dist = candidate_appear_dist / candidate_appear_dist.sum(dim=1, keepdim=True)
-        #candidate_appear_dist = candidate_appear_dist.view(batch_size, cand_max_num, cand_pos_max_num)
-
-        # original idea
-        candidate_appear_dist = F.softmax(utils.batch_gather(logits, candidates).view(batch_size,
-                cand_max_num * cand_pos_max_num), dim=1) # [batch, cand * pos]
-        candidate_appear_dist = torch.clamp(candidate_appear_dist * candidate_appear_mask.view(batch_size,
-                cand_max_num * cand_pos_max_num).float(), 1e-8, 1.0) # [batch, cand * pos]
-        candidate_appear_dist = (candidate_appear_dist / candidate_appear_dist.sum(dim=1, keepdim=True)).view(batch_size,
-                cand_max_num, cand_pos_max_num) # [batch, cand, pos]
-
-        if not (candidate_appear_dist > 0).all().item():
-            print(candidate_appear_dist)
-            assert False
-
-        candidate_dist = candidate_appear_dist.sum(dim=2) # [batch, cand]
-        candidate_logits = candidate_dist.log() # [batch, cand]
+        candidate_appear_logits = utils.batch_gather(logits, candidates) + \
+                candidate_appear_mask.float().log() # [batch, cand, pos]
+        candidate_logits = candidate_appear_logits.max(dim=2) # [batch, cand]
+        candidate_logits = F.log_softmax(candidate_logits, dim=1)
 
         predictions = candidate_logits.argmax(dim=1) # [batch]
-        if not (predictions < candidate_num).all().item():
-            print(candidate_dist)
-            print(candidate_num)
-            assert False
+        assert (predictions < candidate_num).all()
 
         if 'refs' not in batch or batch['refs'] is None:
             return {'predictions': predictions}

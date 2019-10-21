@@ -83,7 +83,7 @@ def main():
     # pretrained performance
     best_accu = 0.0
     if os.path.exists(path_prefix + ".model.bin"):
-        best_accu = FLAGS.best_accu if FLAGS.__dict__.has_key('best_accu') and abs(FLAGS.best_accu) > 1e-4 \
+        best_accu = FLAGS.best_accu if 'best_accu' in FLAGS.__dict__ and abs(FLAGS.best_accu) > 1e-4 \
                 else evaluate_dataset(model, devset_batches)
         FLAGS.best_accu = best_accu
         print("!!Accuracy for pretrained model is {}".format(best_accu))
@@ -96,7 +96,7 @@ def main():
         optimizer = BertAdam(model.parameters(),
                 lr=FLAGS.learning_rate, warmup=FLAGS.warmup_proportion, t_total=train_updates)
     elif FLAGS.optim == 'adam':
-        optimizer = Adam(model.parameters(), lr=FLAGS.learning_rate)
+        optimizer = Adam(model.parameters(), lr=FLAGS.learning_rate, weight_decay=FLAGS.lambda_l2)
     else:
         assert False, 'unsupported optimizer type: {}'.format(FLAGS.optim)
 

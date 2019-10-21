@@ -7,7 +7,7 @@ import random
 import torch
 import utils
 
-from allennlp.modules.elmo import Elmo, batch_to_ids
+from allennlp.modules.elmo import batch_to_ids
 
 def span_distance(sp1, sp2):
     sp1, sp2 = sorted([sp1,sp2])
@@ -235,15 +235,6 @@ def make_batches_elmo(features, config, is_sort=True, is_shuffle=False):
     batches = []
     while N < len(features):
         B = min(config.batch_size, len(features) - N)
-
-        # useless under ELMo
-        #input_lens = []
-        #maxlen = 0
-        #for i in range(B):
-        #    l = len(features[N+i]['passage'])
-        #    input_lens.append(l)
-        #    maxlen = max(maxlen, l)
-        #input_lens = torch.tensor(input_lens, dtype=torch.long)
 
         # textual input
         passage_ids = batch_to_ids([features[N+i]['passage'] for i in range(0, B)]) # [batch, passage]
