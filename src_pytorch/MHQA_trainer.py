@@ -60,21 +60,27 @@ def main():
     print('device: {}, n_gpu: {}, grad_accum_steps: {}'.format(device, n_gpu, FLAGS.grad_accum_steps))
     log_file.write('device: {}, n_gpu: {}, grad_accum_steps: {}\n'.format(device, n_gpu, FLAGS.grad_accum_steps))
 
+    glove_vocab = None
+    glove_embedding = None
+    if FLAGS.embedding_model.find('elmo') < 0:
+        print('Loading GloVe model from: {}'.format(FLAGS.glove_path))
+        glove_vocab, glove_embedding = MHQA_data_stream.load_glove(FLAGS.glove_path)
+
     print('Loading train set.')
     trainset, _ = MHQA_data_stream.read_data_file(FLAGS.train_path, FLAGS)
-    trainset_batches = MHQA_data_stream.make_batches_elmo(trainset, FLAGS)
+    trainset_batches = MHQA_data_stream.make_batches(trainset, FLAGS, glove_vocab)
     print('Number of training samples: {}'.format(len(trainset)))
     print('Number of training batches: {}'.format(len(trainset_batches)))
 
     print('Loading dev set.')
     devset, _ = MHQA_data_stream.read_data_file(FLAGS.dev_path, FLAGS)
-    devset_batches = MHQA_data_stream.make_batches_elmo(devset, FLAGS)
+    devset_batches = MHQA_data_stream.make_batches(devset, FLAGS, glove_vocab)
     print('Number of dev samples: {}'.format(len(devset)))
     print('Number of dev batches: {}'.format(len(devset_batches)))
 
     # model
     print('Compiling model.')
-    model = MHQA_model_graph.ModelGraph(FLAGS)
+    model = MHQA_model_graph.ModelGraph(FLAGS, glove_embedding)
     if os.path.exists(path_prefix + ".model.bin"):
         print('!!Existing pretrained model. Loading the model...')
         model.load_state_dict(torch.load(path_prefix + ".model.bin"))

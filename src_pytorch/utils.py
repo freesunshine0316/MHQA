@@ -14,6 +14,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def contain_nan(x):
+    return (x != x).any().item()
+
+
+def clip_and_normalize(word_probs, epsilon):
+    word_probs = torch.clamp(word_probs, epsilon, 1.0 - epsilon)
+    return word_probs / word_probs.sum(dim=-1, keepdim=True)
+
+
 def calc_f1(n_both, n_ref, n_out):
     #print('n_out {}, n_ref {}, n_both {}'.format(n_out, n_ref, n_both))
     pr = n_both/n_out if n_out > 0.0 else 0.0

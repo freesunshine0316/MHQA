@@ -9,6 +9,8 @@ import utils
 
 from allennlp.modules.elmo import batch_to_ids
 
+PAD_ID, UNK_ID = 0, 1
+
 def span_distance(sp1, sp2):
     sp1, sp2 = sorted([sp1,sp2])
     if sp1[0] <= sp2[0] <= sp1[1] or sp1[0] <= sp2[1] <= sp1[1]:
@@ -223,7 +225,35 @@ def read_data_file(inpath, options, subset_ids=None):
     return all_instances, filtered_instances
 
 
-def make_batches_elmo(features, config, is_sort=True, is_shuffle=False):
+def load_glove(path):
+    vocab = {}
+    embedding = []
+    for i, line in enumerate(open(path, 'r')):
+        line = line.strip().split()
+        word = line[0]
+        vec = [float(line[j]) for j in range(1, len(line))]
+        if len(vec) == 300 and word not in vocab:
+            vocab[word] = len(embedding)
+            embedding.append(vec)
+    embedding = np.array(embedding)
+    return vocab, embedding
+
+
+def batch_to_ids_glove(batch, vocab, padd10):
+    batch_size = len(batch)
+    seq_max_len = max(len(x) for x in batch)
+    if padd10:
+        extra_len = (10 - (seq_max_len % 10)) % 10
+        seq_max_len += extra_len
+    ids = np.zeros((batch_size, seq_max_len), dtype=np.long)
+    for i, seq in enumerate(batch):
+        for j, tok in enumerate(seq):
+            ids[i,j] = vocab.get(tok, UNK_ID)
+    ids = torch.tensor(ids, dtype=torch.long)
+    return ids
+
+
+def make_batches(features, config, glove_vocab, is_sort=True, is_shuffle=False):
     if is_sort:
         features.sort(key=lambda x: len(x['passage']))
     elif is_shuffle:
@@ -237,14 +267,19 @@ def make_batches_elmo(features, config, is_sort=True, is_shuffle=False):
         B = min(config.batch_size, len(features) - N)
 
         # textual input
-        passage_ids = batch_to_ids([features[N+i]['passage'] for i in range(0, B)]) # [batch, passage]
+        if 'elmo' in config.embedding_model:
+            passage_ids = batch_to_ids([features[N+i]['passage'] for i in range(0, B)]) # [batch, passage]
+            question_ids = batch_to_ids([features[N+i]['question'] for i in range(0, B)]) # [batch, question]
+            passage_max_len, other = list(passage_ids.size()[1:])
+            extra_len = (10 - (passage_max_len % 10)) % 10
+            if extra_len > 0:
+                extra_ids = torch.zeros(B, extra_len, other, dtype=torch.long)
+                passage_ids = torch.cat([passage_ids, extra_ids], dim=1)
+        else:
+            passage_ids = batch_to_ids_glove([features[N+i]['passage'] for i in range(0, B)], glove_vocab, True)
+            question_ids = batch_to_ids_glove([features[N+i]['question'] for i in range(0, B)], glove_vocab, False)
+
         passage_lens = torch.tensor([len(features[N+i]['passage']) for i in range(0, B)], dtype=torch.long) # [batch]
-        _, passage_max_len, other = list(passage_ids.size())
-        extra_len = 10 - (passage_max_len % 10)
-        if extra_len < 10:
-            extra_ids = torch.zeros(B, extra_len, other, dtype=torch.long)
-            passage_ids = torch.cat([passage_ids, extra_ids], dim=1)
-        question_ids = batch_to_ids([features[N+i]['question'] for i in range(0, B)]) # [batch, question]
         question_lens = torch.tensor([len(features[N+i]['question']) for i in range(0, B)], dtype=torch.long) # [batch]
         assert (question_lens > 0).all()
 
@@ -255,6 +290,7 @@ def make_batches_elmo(features, config, is_sort=True, is_shuffle=False):
         maxegnum = 0
         for i in range(B):
             l = len(features[N+i]['mention_starts'])
+            assert l > 0
             mention_nums.append(l)
             maxmnum = max(maxmnum, l)
             if config.graph_encoding in ("GCN", "GRN"):
@@ -302,11 +338,13 @@ def make_batches_elmo(features, config, is_sort=True, is_shuffle=False):
         maxcpnum = 0
         for i in range(B):
             l = len(features[N+i]['candidates'])
+            assert l > 0
             candidate_num.append(l)
             maxcnum = max(maxcnum, l)
             candidate_appear_num_lst.append([])
             for j in range(l):
                 ll = len(features[N+i]['candidates'][j])
+                assert ll > 0
                 candidate_appear_num_lst[-1].append(ll)
                 maxcpnum = max(maxcpnum, ll)
         candidate_num = torch.tensor(candidate_num, dtype=torch.long)

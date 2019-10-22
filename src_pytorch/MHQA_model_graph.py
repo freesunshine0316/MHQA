@@ -15,7 +15,7 @@ from allennlp.modules.elmo import Elmo, batch_to_ids
 
 
 class ModelGraph(nn.Module):
-    def __init__(self, general_config):
+    def __init__(self, general_config, glove_embedding):
         super(ModelGraph, self).__init__()
         self.general_config = general_config
         self.dropout = nn.Dropout(self.general_config.dropout)
@@ -30,7 +30,10 @@ class ModelGraph(nn.Module):
                 self.elmo_layer_interp = nn.Linear(self.elmo_L, 1, bias=False)
             emb_size = self.elmo.get_output_dim()
         else:
-            assert False, 'not supporting regular Golve embedding now'
+            assert glove_embedding is not None
+            self.glove_embedding = nn.Embedding(glove_embedding.shape[0], glove_embedding.shape[1])
+            self.glove_embedding.weight.data.copy_(torch.from_numpy(glove_embedding))
+            emb_size = glove_embedding.shape[1]
 
         self.passage_encoder = nn.LSTM(emb_size, self.general_config.lstm_size, num_layers=1,
                 batch_first=True, bidirectional=True)
@@ -74,31 +77,37 @@ class ModelGraph(nn.Module):
             self.matching_integrater = nn.Linear(general_config.graph_encoding_steps + 1, 1, bias=False)
 
 
-    def get_glove_repre(slf, ids):
-        pass
-
-
-    def get_elmo_repre(self, ids):
-        elmo_outputs = self.elmo(ids)
-        if self.elmo_L > 1:
-            repre = torch.stack(elmo_outputs['elmo_representations'], dim=3) # [batch, seq, emb, L]
-            repre = self.elmo_layer_interp(repre).squeeze(dim=3) # [batch, seq, emb]
+    def get_repre(self, ids):
+        if self.general_config.embedding_model.find('elmo') >= 0:
+            elmo_outputs = self.elmo(ids)
+            if self.elmo_L > 1:
+                repre = torch.stack(elmo_outputs['elmo_representations'], dim=3) # [batch, seq, emb, L]
+                repre = self.elmo_layer_interp(repre).squeeze(dim=3) # [batch, seq, emb]
+            else:
+                repre = elmo_outputs['elmo_representations'][0] # [batch, seq, emb]
+            return repre * elmo_outputs['mask'].float().unsqueeze(dim=2) # [batch, seq, emb]
         else:
-            repre = elmo_outputs['elmo_representations'][0] # [batch, seq, emb]
-        return repre * elmo_outputs['mask'].float().unsqueeze(dim=2) # [batch, seq, emb]
+            return self.glove_embedding(ids)
 
 
     def forward(self, batch):
-        batch_size, passage_max_len, other = list(batch['passage_ids'].size())
+        if self.general_config.embedding_model.find('elmo') >= 0:
+            batch_size, passage_max_len, other = list(batch['passage_ids'].size())
+        else:
+            batch_size, passage_max_len = list(batch['passage_ids'].size())
         assert passage_max_len % 10 == 0
 
-        passage_ids = batch['passage_ids'].view(batch_size * 10, passage_max_len // 10, other) # [batch*10, passage/10, other]
-        passage_repre = self.get_elmo_repre(passage_ids) # [batch*10, passage/10, elmo_emb]
+        if self.general_config.embedding_model.find('elmo') >= 0:
+            passage_ids = batch['passage_ids'].view(batch_size * 10, passage_max_len // 10, other) # [batch*10, passage/10, other]
+        else:
+            passage_ids = batch['passage_ids'].view(batch_size * 10, passage_max_len // 10) # [batch*10, passage/10]
+
+        passage_repre = self.get_repre(passage_ids) # [batch*10, passage/10, elmo_emb]
         passage_repre, _ = self.passage_encoder(passage_repre) # [batch*10, passage/10, lstm_emb]
         emb_size = utils.shape(passage_repre, 2)
         passage_repre = passage_repre.contiguous().view(batch_size, passage_max_len, emb_size)
 
-        question_repre = self.get_elmo_repre(batch['question_ids']) # [batch, question, elmo_emb]
+        question_repre = self.get_repre(batch['question_ids']) # [batch, question, elmo_emb]
         question_repre, _ = self.question_encoder(question_repre) # [batch, question, lstm_emb]
 
         # modeling question
@@ -162,6 +171,8 @@ class ModelGraph(nn.Module):
                 cand_pos_max_num).view(batch_size, cand_max_num, cand_pos_max_num) # [batch, cand, pos]
         assert not (candidate_appear_mask & (~candidate_mask.unsqueeze(dim=2))).any().item()
 
+        # ideas to get 'candidate_appear_dist'
+
         ## idea 1
         #candidate_appear_logits = (utils.batch_gather(logits, candidates) + \
         #        candidate_appear_mask.float().log()).view(batch_size, cand_max_num * cand_pos_max_num) # [batch, cand * pos]
@@ -175,21 +186,33 @@ class ModelGraph(nn.Module):
         #candidate_appear_dist = candidate_appear_dist / candidate_appear_dist.sum(dim=1, keepdim=True)
         #candidate_appear_dist = candidate_appear_dist.view(batch_size, cand_max_num, cand_pos_max_num)
 
-        # original idea
-        candidate_appear_dist = F.softmax(utils.batch_gather(logits, candidates).view(batch_size,
-                cand_max_num * cand_pos_max_num), dim=1) # [batch, cand * pos]
-        candidate_appear_dist = torch.clamp(candidate_appear_dist * candidate_appear_mask.view(batch_size,
-                cand_max_num * cand_pos_max_num).float(), 1e-8, 1.0) # [batch, cand * pos]
-        candidate_appear_dist = (candidate_appear_dist / candidate_appear_dist.sum(dim=1, keepdim=True)).view(batch_size,
-                cand_max_num, cand_pos_max_num) # [batch, cand, pos]
+        ## idea 3
+        #candidate_appear_dist = F.softmax(utils.batch_gather(logits, candidates).view(batch_size,
+        #        cand_max_num * cand_pos_max_num), dim=1) # [batch, cand * pos]
+        #candidate_appear_dist = torch.clamp(candidate_appear_dist * candidate_appear_mask.view(batch_size,
+        #        cand_max_num * cand_pos_max_num).float(), 1e-8, 1.0) # [batch, cand * pos]
+        #candidate_appear_dist = (candidate_appear_dist / candidate_appear_dist.sum(dim=1, keepdim=True)).view(batch_size,
+        #        cand_max_num, cand_pos_max_num) # [batch, cand, pos]
 
-        if not (candidate_appear_dist > 0).all().item():
-            print(candidate_appear_dist)
+        ## get 'candidate_dist', which is common for idea 1, 2 and 3
+        #if not (candidate_appear_dist > 0).all().item():
+        #    print(candidate_appear_dist)
+        #    assert False
+        #candidate_dist = candidate_appear_dist.sum(dim=2) # [batch, cand]
+
+        # original impl
+        mention_dist = F.softmax(logits, dim=1)
+        if utils.contain_nan(mention_dist):
+            print(logits)
+            print(mention_dist)
             assert False
+        candidate_appear_dist = utils.batch_gather(mention_dist, candidates) * candidate_appear_mask.float()
+        candidate_dist = candidate_appear_dist.sum(dim=2) * candidate_mask.float()
+        candidate_dist = utils.clip_and_normalize(candidate_dist, 1e-6)
+        assert utils.contain_nan(candidate_dist) == False
+        # end of original impl
 
-        candidate_dist = candidate_appear_dist.sum(dim=2) # [batch, cand]
         candidate_logits = candidate_dist.log() # [batch, cand]
-
         predictions = candidate_logits.argmax(dim=1) # [batch]
         if not (predictions < candidate_num).all().item():
             print(candidate_dist)
