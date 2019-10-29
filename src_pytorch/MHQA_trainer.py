@@ -21,6 +21,7 @@ from pytorch_pretrained_bert.optimization import BertAdam
 from torch.optim import Adam
 
 def evaluate_dataset(model, dataset):
+    model.eval()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gen = []
     ref = []
@@ -34,7 +35,7 @@ def evaluate_dataset(model, dataset):
         dev_loss += outputs['loss'].item()
         dev_right += outputs['right_count'].item()
         dev_total += len(batch['ids'])
-
+    model.train()
     return {'dev_loss':dev_loss, 'dev_accu':1.0*dev_right/dev_total, 'dev_right':dev_right, 'dev_total':dev_total, }
 
 

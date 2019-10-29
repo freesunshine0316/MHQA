@@ -7,6 +7,7 @@ import random
 import torch
 import utils
 
+from unidecode import unidecode
 from allennlp.modules.elmo import batch_to_ids
 
 PAD_ID, UNK_ID = 0, 1
@@ -83,7 +84,7 @@ def read_data_file(inpath, options, subset_ids=None):
         coref_clusters_dict = {}
         for j, web_snippet in enumerate(inst['supports_anno']): # for each passage
             # tokens
-            cur_p_tok = web_snippet['toks']
+            cur_p_tok = [unidecode(x).lower() for x in web_snippet['toks']]
             if thres > 0:
                 cur_p_tok = cur_p_tok[:thres]
             passage_lens.append(len(cur_p_tok))
@@ -143,8 +144,9 @@ def read_data_file(inpath, options, subset_ids=None):
             else:
                 mid = mentions_dict[(st,ed)]
                 inst_m_type[mid] = entity_type_map['query']
-            qstr_1 = mentions_str[mid].lower()
-            qstr_2 = ' '.join(inst['query_anno']['toks']).lower()
+            # CHECK query subject
+            qstr_1 = mentions_str[mid]
+            qstr_2 = ' '.join([unidecode(x).lower() for x in inst['query_anno']['toks']])
             assert qstr_2.endswith(qstr_1), '{} ||| {}'.format(qstr_1, qstr_2)
 
         # process candidates
@@ -171,9 +173,9 @@ def read_data_file(inpath, options, subset_ids=None):
         # CHECK candidate positions correctness
         assert len(inst_c) > 0
         for j, inst_c_item in enumerate(inst_c):
-            given_str = ' '.join(inst['candidates_anno'][j]['toks']).lower()
+            given_str = ' '.join([unidecode(x).lower() for x in inst['candidates_anno'][j]['toks']])
             for mid in inst_c_item:
-                passage_str = mentions_str[mid].lower()
+                passage_str = mentions_str[mid]
                 assert passage_str == given_str
 
         # process ref
@@ -191,15 +193,13 @@ def read_data_file(inpath, options, subset_ids=None):
             continue
 
         # remove candidates with zero appearances and update r_cid
-        r_st, r_ed = mentions[inst_c[answer_cid][0]]
-        r_str = inst_p_tok[r_st:r_ed]
-
+        r_st_ori, r_ed_ori = mentions[inst_c[answer_cid][0]]
         inst_c_nonempty = []
         inst_c_str = []
         for cid in range(len(inst_c)):
             if inst_c[cid] != []:
                 inst_c_nonempty.append(inst_c[cid])
-                inst_c_str.append(inst['candidates'][cid])
+                inst_c_str.append(unidecode(inst['candidates'][cid]))
         inst_r_cid = None
         if answer_cid is not None:
             inst_r_cid = sum(inst_c[cid] != [] for cid in range(answer_cid))
@@ -207,7 +207,7 @@ def read_data_file(inpath, options, subset_ids=None):
 
         # CHECK ref position after move
         r_st, r_ed = mentions[inst_c[inst_r_cid][0]]
-        assert r_str == inst_p_tok[r_st:r_ed]
+        assert r_st_ori == r_st and r_ed_ori == r_ed
 
         # make edges for the instance
         inst_eg = None
@@ -216,7 +216,7 @@ def read_data_file(inpath, options, subset_ids=None):
         # add to the main data stream
         inst_m_st = [x[0] for x in mentions]
         inst_m_ed = [x[1] for x in mentions]
-        all_instances.append({'question':inst['query_anno']['toks'], 'passage':inst_p_tok,
+        all_instances.append({'question':[unidecode(x).lower() for x in inst['query_anno']['toks']], 'passage':inst_p_tok,
             'mention_starts':inst_m_st, 'mention_ends':inst_m_ed, 'mention_types': inst_m_type, 'edges':inst_eg,
             'candidates':inst_c, 'candidate_str':inst_c_str, 'ref':inst_r_cid, 'id':inst['id']})
 
